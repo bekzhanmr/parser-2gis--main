@@ -1,0 +1,132 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Intel macOS DMG
+    runs-on: macos-12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.3"
+
+      - name: Upgrade pip
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install -e .[gui,dev]
+
+      - name: Install Tcl/Tk and DMG packer
+        run: |
+          brew install tcl-tk create-dmg
+
+      - name: Detect Tcl/Tk paths
+        id: tcltk
+        shell: bash
+        run: |
+          TCL_PREFIX="$(brew --prefix tcl-tk)"
+          echo "tcl_prefix=$TCL_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "Using TCL_PREFIX=$TCL_PREFIX"
+          ls -la "$TCL_PREFIX/lib"
+
+      - name: Build standalone app with bundled Tcl/Tk
+        shell: bash
+        run: |
+          python -m PyInstaller \
+            --clean \
+            --onefile \
+            --windowed \
+            --name Parser2GIS \
+            --icon parser_2gis/data/images/icon.icns \
+            --runtime-hook build_hooks/pyi_rth_tk.py \
+            --hidden-import tkinter \
+            --hidden-import _tkinter \
+            --add-data "parser_2gis/data:parser_2gis/data" \
+            --add-data "${{ steps.tcltk.outputs.tcl_prefix }}/lib/tcl8.6:_tcl_data" \
+            --add-data "${{ steps.tcltk.outputs.tcl_prefix }}/lib/tk8.6:_tk_data" \
+            parser-2gis.py
+
+      - name: Verify app bundle
+        shell: bash
+        run: |
+          ls -la dist
+          test -e "dist/Parser2GIS"
+          file "dist/Parser2GIS"
+
+      - name: Wrap binary into .app bundle
+        shell: bash
+        run: |
+          mkdir -p "dist/Parser2GIS.app/Contents/MacOS"
+          mkdir -p "dist/Parser2GIS.app/Contents/Resources"
+
+          cp "dist/Parser2GIS" "dist/Parser2GIS.app/Contents/MacOS/Parser2GIS"
+          cp "parser_2gis/data/images/icon.icns" "dist/Parser2GIS.app/Contents/Resources/icon.icns"
+
+          cat > "dist/Parser2GIS.app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>Parser2GIS</string>
+              <key>CFBundleExecutable</key>
+              <string>Parser2GIS</string>
+              <key>CFBundleIconFile</key>
+              <string>icon.icns</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.bekzhanmr.parser2gis</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>Parser2GIS</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.15</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Build DMG
+        shell: bash
+        run: |
+          create-dmg \
+            --volname "Parser2GIS" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "Parser2GIS.app" 200 190 \
+            --hide-extension "Parser2GIS.app" \
+            --app-drop-link 600 185 \
+            "Parser2GIS.dmg" \
+            "dist/"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Parser2GIS-macOS-DMG
+          path: Parser2GIS.dmg
+          retention-days: 30
+
+      - name: Upload APP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Parser2GIS-macOS-APP
+          path: dist/Parser2GIS.app
+          retention-days: 30
